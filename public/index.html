@@ -1,0 +1,270 @@
+<html>
+
+<head>
+  <title>DeSo Community Representatives Voting</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-1BmE4kWBq78iYhFldvKuhfTAU6auU8tT94WrHftjDbrCEXSU1oBoqyl2QvZ6jIW3" crossorigin="anonymous">
+  <link rel="stylesheet" href="/stylesheets/style.css">
+  <script src="https://unpkg.com/jquery@3.6.0/dist/jquery.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p" crossorigin="anonymous"></script>
+  <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/v/bs5/dt-1.11.3/datatables.min.css"/>
+  <script type="text/javascript" src="https://cdn.datatables.net/v/bs5/dt-1.11.3/datatables.min.js"></script>
+
+
+  <script type="module">
+    import { v4 as uuidv4 } from 'https://jspm.dev/uuid';
+    $(document).ready(() => {
+      // if you're trying to inspect this, votes will ONLY be recorded with a signed JWT for a specified user.
+      const isDevice = (/android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(navigator.userAgent.toLowerCase()));
+      const targetBlankOrNull = isDevice ? '_blank' : null;
+
+
+      let iWindow = null;    
+      let pm_id   = null;
+      let source  = null;
+      let user    = null;
+
+
+      let votes = [];
+
+
+
+      $("#loginButton").click(async e => {
+        e.preventDefault();
+        iWindow = window.open('https://identity.bitclout.com/log-in?accessLevelRequest=2', targetBlankOrNull, 'toolbar=no, width=800 height=1000, top=0, left=0');
+      });
+
+      $("#signOutButton").click(async e => {
+        e.preventDefault();
+        user = null;
+        $("#signOutButton").addClass("hide");
+        $("#loginButton").removeClass("hide");
+        $("#voteContainer").addClass("hide");
+        $("#subtitle").text("Wanna Vote?");
+        window.location.href = window.location.href;
+      });
+
+
+      function respond(e, t, n, m) {
+        if (typeof e !== 'undefined') {
+          if (e !== null) {
+            if (m == true) {
+
+              e.postMessage({
+                id: t,
+                service: "identity", 
+                method: "info"
+              }, "*");
+
+            } else {
+
+              e.postMessage({
+                id: t,
+                service: "identity"
+              }, "*");
+            }
+          }
+        }
+      }
+
+      function handleLogin(payload, src = source) {
+        user = payload['users'][payload.publicKeyAdded];
+        user['publicKey'] = payload.publicKeyAdded;
+        src.postMessage({
+          id: pm_id,
+          service: 'identity',
+          method: 'jwt',
+          payload: {
+            accessLevel: user.accessLevel,
+            accessLevelHmac: user.accessLevelHmac,
+            encryptedSeedHex: user.encryptedSeedHex
+          }
+        }, "*");
+      }
+
+      function handleJWT(payload) {
+        user['jwt'] = payload['jwt'];
+        if (iWindow !== null && votes.length == 0) {
+          iWindow.close();
+          iWindow = null;
+          $('#loginButton').addClass("hide");
+          $('#signOutButton').removeClass('hide');
+
+          $('#subtitle').text(`Hello, ${user.publicKey}! Please wait...`);
+          handlePostLogin();
+        }
+
+        if (votes.length > 0) {
+          // got JWT, lets send that payload
+          $.post({
+            url: '/api/vote', 
+            method: 'POST', 
+            data: JSON.stringify(votes),
+            headers: {
+              'Content-Type' : 'application/json',
+              'x-deso-publickey' : user.publicKey,
+              'x-deso-jwt' : user.jwt
+            },
+            success: (d,s) => {
+              alert("success! thanks for casting your vote.");
+              window.location.href = window.location.href;
+            },
+            error: (jq, status) => {
+              console.log(jq);
+              alert("there was an error casting your ballot.")
+            },
+            complete: (jq, status) => {
+              alert("success! thanks for casting your vote.");
+              window.location.href = window.location.href;
+            }
+          });
+        }
+      }
+
+      function handlePostLogin() {
+        $.get({
+          url: '/api/get',
+          headers: {
+            'x-deso-publickey' : user.publicKey,
+            'x-deso-jwt' : user.jwt
+          },
+          success: (d,s, jQ) => {
+            let tUsername = jQ.getResponseHeader('x-deso-username');
+            $('#subtitle').text(`Hello, ${tUsername}!`);
+
+            
+
+            let dt = $("#voteTable").DataTable({
+              pageLength: 50,
+              data: d.data,
+              columns: [
+                {data: 'z', title: 'RandomOrder'},
+                {data: 'b', title: 'Internal ID'},
+                {data: 'u', title: 'Candidates'}
+              ]
+            });
+            $("#voteContainer").removeClass("hide");
+            console.log({d,s});
+            $("#voteTable tbody").on('click', 'tr', function() {
+                
+              let t = dt.rows('.selected').data().length;
+              if (t >= 3) {
+                if ($(this).hasClass('selected')) {
+                  $(this).toggleClass('selected');
+                } else {
+                  alert("Error. Please only select up to three.");
+                }
+              } else {
+                $(this).toggleClass('selected');
+              }
+            });
+            $("#castVote").on('click', function() {
+              let t = dt.rows('.selected').data().length;
+              if (t > 3) {
+                alert("Somehow, you have more than three selected. please select three or less.");
+              } else if ( t <= 0 ) {
+                alert("Please select at least one candidate (max 3) before casting your vote.");
+              } else {
+                let reallyOK = confirm("Are you sure you're ready to cast your vote? YOU WILL NOT BE ABLE TO DO THIS AGAIN, EVEN IF YOU HAVE NOT SELECTED THREE");
+
+                if (reallyOK == true) {
+                  // cast vote
+                  for (var i=0; i < t; i++) {
+                    let row = dt.rows('.selected').data()[i];
+                    votes.push(row.b);
+                  }
+                  // console.log(dt.rows('.selected').data());
+                  let iD = document.getElementById("identity");
+                  if (iD instanceof HTMLIFrameElement) {
+                    iD.contentWindow.postMessage ({
+                      id: uuidv4(),
+                      service: 'identity',
+                      method: 'jwt',
+                      payload: {
+                        accessLevel: user.accessLevel,
+                        accessLevelHmac: user.accessLevelHmac,
+                        encryptedSeedHex: user.encryptedSeedHex
+                      }
+                    }, "*");
+                  }
+                }
+              }
+
+
+            });
+
+          },
+          error: (jqXHR, status, err) => {
+            console.log({jqXHR, status, err});
+
+            alert("there was an error: " + jqXHR.responseJSON.err || 'Unspecified error. contact support.');
+            window.location.href = window.location.href;
+          }
+        });
+      }
+
+
+      
+      window.addEventListener('message', async message => {
+        console.log(message);
+
+        const { data: { id: id, method: method, service: service, payload: payload } } = message;
+
+        let {hasStorageAccess = null, browserSupported = null} = payload;
+    
+        if (service !== "identity") {return;}
+        
+        if (method == 'initialize') {
+          pm_id = message.data.id;
+          source = message.source;
+
+          respond(message.source, message.data.id, {}, false);
+
+          if (isDevice == true) {
+            respond(message.source, uuidv4(), {}, true);
+          }
+        } else if (method == 'storageGranted') {
+          $("#identity").addClass("hide");
+        } else if (hasStorageAccess == false && browserSupported == true) {
+          // $('#identity').removeClass("hide");
+        } else if (method == 'login') {
+          handleLogin(payload, message.source);
+        } else if ('jwt' in payload) {
+          handleJWT(payload);
+        }
+      });
+    });
+  </script>
+</head>
+<body>
+  <iframe
+  title="bitCloutIdentity"
+  id="identity"
+  class="hide"
+  frameborder="0"
+  src="https://identity.bitclout.com/embed"
+  style="height: 100vh; width: 100vw;"
+  
+></iframe>
+  <div class="jumbotron text-center">
+    <div class="row">
+      <div class="col">
+        <h1><img class="desologo" src="https://identity.bitclout.com/assets/camelcase_logo.svg" />Community Representatives Voting</h1>
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-md btn-secondary hide" id="signOutButton">Sign Out</button>
+      </div>
+    </div>
+    <h4 id="subtitle">Wanna vote?</h4>
+    <button class="btn btn-block btn-primary" id="loginButton">Login with DeSo Identity</button>
+
+  </div>
+  <div class="container-fluid hide" id="voteContainer">
+    <h4>Select who to vote for by clicking on the row, click the line again to deselect. <br />
+      Note: Please select up to three (3). You may only cast a vote once. Candidates are listed in a random order.</h4>
+    <button id="castVote" class="btn btn-info btn-md">Cast Vote</button>
+    <table id="voteTable" style="width:100%;"></table>
+  </div>
+  
+</body>
+
+</html>
